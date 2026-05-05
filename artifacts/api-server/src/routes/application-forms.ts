@@ -1,0 +1,864 @@
+import { Router } from "express";
+import { eq, desc, inArray, and } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import { db, applicationFormsTable, applicationSubmissionsTable, programsTable, candidatesTable, candidatePreferencesTable, specialitiesTable, paymentSettingsTable } from "@workspace/db";
+import { requireAuth, requireRole } from "../middleware/auth";
+import * as XLSX from "xlsx";
+import { sendApplicationApprovalEmail } from "../lib/email";
+import { google } from "googleapis";
+import fs from "fs/promises";
+import { createWriteStream } from "fs";
+import path from "path";
+
+const router: Router = Router();
+
+function generateToken(): string {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
+
+function checkCompleteness(sub: {
+  fullName?: string | null; email?: string | null; phone?: string | null;
+  degree?: string | null; medicalCollege?: string | null;
+  lor1Url?: string | null; lor2Url?: string | null; photoUrl?: string | null;
+}): boolean {
+  return !!(sub.fullName && sub.email && sub.phone && sub.degree && sub.medicalCollege && sub.lor1Url && sub.lor2Url && sub.photoUrl);
+}
+
+router.get(
+  "/application-forms",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (_req, res) => {
+    const forms = await db.select().from(applicationFormsTable).orderBy(desc(applicationFormsTable.createdAt));
+    const programs = await db.select().from(programsTable);
+    const submissions = await db.select().from(applicationSubmissionsTable);
+
+    const out = forms.map((f) => {
+      const prog = programs.find((p) => p.id === f.programId);
+      const subs = submissions.filter((s) => s.formId === f.id);
+      return {
+        ...f,
+        programName: prog?.name ?? null,
+        submissionCount: subs.length,
+        pendingCount: subs.filter((s) => s.status === "pending").length,
+      };
+    });
+    res.json(out);
+  }
+);
+
+router.post(
+  "/application-forms",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const { programId, title, description, deadline } = req.body as {
+      programId: number; title: string; description?: string; deadline?: string;
+    };
+    if (!programId || !title) return res.status(400).json({ error: "programId and title required" });
+
+    const { customFields } = req.body as { customFields?: unknown[] };
+    const token = generateToken();
+    const [form] = await db.insert(applicationFormsTable).values({
+      token,
+      programId,
+      title,
+      description: description ?? null,
+      deadline: deadline ? new Date(deadline) : null,
+      isActive: true,
+      createdBy: req.user!.userId,
+      customFields: (customFields as never) ?? [],
+    }).returning();
+    res.status(201).json(form);
+  }
+);
+
+router.patch(
+  "/application-forms/:id",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const { isActive, deadline, title, description, customFields } = req.body as {
+      isActive?: boolean; deadline?: string | null; title?: string; description?: string; customFields?: unknown[];
+    };
+    const updates: Partial<typeof applicationFormsTable.$inferInsert> = {};
+    if (isActive !== undefined) updates.isActive = isActive;
+    if (title !== undefined) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (deadline !== undefined) updates.deadline = deadline ? new Date(deadline) : null;
+    if (customFields !== undefined) updates.customFields = customFields as never;
+
+    const [updated] = await db
+      .update(applicationFormsTable)
+      .set(updates)
+      .where(eq(applicationFormsTable.id, id))
+      .returning();
+    if (!updated) return res.status(404).json({ error: "Form not found" });
+    res.json(updated);
+  }
+);
+
+router.delete(
+  "/application-forms/:id",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    await db.delete(applicationSubmissionsTable).where(eq(applicationSubmissionsTable.formId, id));
+    await db.delete(applicationFormsTable).where(eq(applicationFormsTable.id, id));
+    res.json({ success: true });
+  }
+);
+
+router.get(
+  "/application-forms/:id/submissions",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const formId = Number(req.params.id);
+    const subs = await db
+      .select()
+      .from(applicationSubmissionsTable)
+      .where(eq(applicationSubmissionsTable.formId, formId))
+      .orderBy(desc(applicationSubmissionsTable.submittedAt));
+    res.json(subs);
+  }
+);
+
+router.get(
+  "/application-forms/:id/export",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const formId = Number(req.params.id);
+    const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, formId));
+    const subs = await db
+      .select()
+      .from(applicationSubmissionsTable)
+      .where(eq(applicationSubmissionsTable.formId, formId))
+      .orderBy(desc(applicationSubmissionsTable.submittedAt));
+
+    const rows = subs.map((s) => ({
+      "Submission ID": s.id,
+      "Status": s.status,
+      "Source": s.source ?? "internal",
+      "Ready for Review": (s.readyForReview ?? false) ? "Yes" : "No",
+      "Submitted At": s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-IN") : "",
+      "Full Name": s.fullName,
+      "Email": s.email,
+      "Phone": s.phone ?? "",
+      "Date of Birth": s.dateOfBirth ?? "",
+      "Marital Status": s.maritalStatus ?? "",
+      "Permanent Address": s.permanentAddress ?? "",
+      "Specialization Applied": s.specialization ?? "",
+      "Center Preference": s.centerPreference ?? "",
+      "Referral Source": s.referralSource ?? "",
+      "Degree": s.degree ?? "",
+      "Medical College": s.medicalCollege ?? "",
+      "University": s.university ?? "",
+      "Medical Council Number": s.medicalCouncilNumber ?? "",
+      "Publications": s.publications ?? "",
+      "Presentations": s.presentations ?? "",
+      "LOR 1 URL": s.lor1Url ?? "",
+      "LOR 2 URL": s.lor2Url ?? "",
+      "Photo URL": s.photoUrl ?? "",
+      "Declaration Accepted": s.declarationAccepted ? "Yes" : "No",
+      "Payment URL": s.paymentUrl ?? "",
+      "Review Notes": s.reviewNotes ?? "",
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const colWidths = Object.keys(rows[0] ?? {}).map((k) => ({ wch: Math.max(k.length + 2, 18) }));
+    ws["!cols"] = colWidths;
+    XLSX.utils.book_append_sheet(wb, ws, "Submissions");
+
+    const safeName = (form?.title ?? `form-${formId}`).replace(/[^a-zA-Z0-9-_]/g, "_").slice(0, 40);
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}_submissions.xlsx"`);
+    res.send(buffer);
+  }
+);
+
+router.patch(
+  "/application-forms/submissions/:id",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const { status, reviewNotes } = req.body as { status?: string; reviewNotes?: string };
+    const updates: Partial<typeof applicationSubmissionsTable.$inferInsert> = {};
+    if (status) updates.status = status;
+    if (reviewNotes !== undefined) updates.reviewNotes = reviewNotes;
+    updates.reviewedAt = new Date();
+
+    const [updated] = await db
+      .update(applicationSubmissionsTable)
+      .set(updates)
+      .where(eq(applicationSubmissionsTable.id, id))
+      .returning();
+    if (!updated) return res.status(404).json({ error: "Submission not found" });
+    res.json(updated);
+  }
+);
+
+router.post(
+  "/application-forms/submissions/:id/approve",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const [sub] = await db.select().from(applicationSubmissionsTable).where(eq(applicationSubmissionsTable.id, id));
+    if (!sub) return res.status(404).json({ error: "Submission not found" });
+
+    const form = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, sub.formId));
+    const programId = form[0]?.programId ?? 1;
+
+    const existing = await db.select().from(candidatesTable).where(eq(candidatesTable.email, sub.email));
+    if (existing.length > 0) {
+      await db.update(applicationSubmissionsTable).set({ status: "approved", reviewedAt: new Date() }).where(eq(applicationSubmissionsTable.id, id));
+      return res.json({ message: "Candidate already exists", candidateId: existing[0]!.id });
+    }
+
+    const year = new Date().getFullYear();
+    const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const code = `SAV-${year}-${rand}`;
+
+    const [candidate] = await db.insert(candidatesTable).values({
+      candidateCode: code,
+      fullName: sub.fullName,
+      email: sub.email,
+      phone: sub.phone ?? null,
+      dateOfBirth: sub.dateOfBirth ?? null,
+      gender: null,
+      address: sub.permanentAddress ?? null,
+      qualification: sub.degree ?? null,
+      collegeName: sub.medicalCollege ?? null,
+      status: "pending",
+    }).returning();
+
+    if (sub.specialization) {
+      const specs = await db.select().from(specialitiesTable);
+      const spec = specs.find((s) => s.name === sub.specialization);
+      if (spec) {
+        await db.insert(candidatePreferencesTable).values({
+          candidateId: candidate!.id,
+          specialityId: spec.id,
+          preferenceOrder: 1,
+        });
+      }
+    }
+
+    await db.update(applicationSubmissionsTable).set({ status: "approved", reviewedAt: new Date() }).where(eq(applicationSubmissionsTable.id, id));
+
+    const prog = await db.select().from(programsTable).where(eq(programsTable.id, programId));
+    sendApplicationApprovalEmail({
+      toEmail: sub.email,
+      toName: sub.fullName,
+      candidateCode: candidate!.candidateCode,
+      programName: prog[0]?.name ?? "Fellowship Program",
+      formTitle: form[0]?.title ?? "Application",
+    }).catch((e: Error) => console.warn("[email] failed:", e.message));
+
+    res.json({ message: "Candidate created", candidateId: candidate!.id });
+  }
+);
+
+// Bulk approve/reject
+router.post(
+  "/application-forms/:formId/submissions/bulk-action",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const formId = Number(req.params.formId);
+    const { action, ids } = req.body as { action: "approve" | "reject"; ids: number[] };
+    if (!action || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "action and ids required" });
+    }
+
+    if (action === "reject") {
+      const result = await db.update(applicationSubmissionsTable)
+        .set({ status: "rejected", reviewedAt: new Date() })
+        .where(and(
+          inArray(applicationSubmissionsTable.id, ids),
+          eq(applicationSubmissionsTable.formId, formId)
+        ))
+        .returning({ id: applicationSubmissionsTable.id });
+      return res.json({ success: true, processed: result.length });
+    }
+
+    if (action === "approve") {
+      let approved = 0;
+      for (const id of ids) {
+        try {
+          const [sub] = await db.select().from(applicationSubmissionsTable)
+            .where(and(eq(applicationSubmissionsTable.id, id), eq(applicationSubmissionsTable.formId, formId)));
+          if (!sub || sub.status === "approved") continue;
+
+          const form = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, sub.formId));
+          const programId = form[0]?.programId ?? 1;
+
+          const existing = await db.select().from(candidatesTable).where(eq(candidatesTable.email, sub.email));
+          if (existing.length > 0) {
+            await db.update(applicationSubmissionsTable).set({ status: "approved", reviewedAt: new Date() }).where(eq(applicationSubmissionsTable.id, id));
+            approved++;
+            continue;
+          }
+
+          const year = new Date().getFullYear();
+          const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+          const code = `SAV-${year}-${rand}`;
+
+          const [candidate] = await db.insert(candidatesTable).values({
+            candidateCode: code,
+            fullName: sub.fullName,
+            email: sub.email,
+            phone: sub.phone ?? null,
+            dateOfBirth: sub.dateOfBirth ?? null,
+            gender: null,
+            address: sub.permanentAddress ?? null,
+            qualification: sub.degree ?? null,
+            collegeName: sub.medicalCollege ?? null,
+            status: "pending",
+          }).returning();
+
+          if (sub.specialization) {
+            const specs = await db.select().from(specialitiesTable);
+            const spec = specs.find((s) => s.name === sub.specialization);
+            if (spec && candidate) {
+              await db.insert(candidatePreferencesTable).values({
+                candidateId: candidate.id,
+                specialityId: spec.id,
+                preferenceOrder: 1,
+              }).onConflictDoNothing();
+            }
+          }
+
+          await db.update(applicationSubmissionsTable).set({ status: "approved", reviewedAt: new Date() }).where(eq(applicationSubmissionsTable.id, id));
+
+          if (candidate) {
+            const prog = await db.select().from(programsTable).where(eq(programsTable.id, programId));
+            sendApplicationApprovalEmail({
+              toEmail: sub.email,
+              toName: sub.fullName,
+              candidateCode: candidate.candidateCode,
+              programName: prog[0]?.name ?? "Fellowship Program",
+              formTitle: form[0]?.title ?? "Application",
+            }).catch(() => {});
+          }
+          approved++;
+        } catch (e) {
+          console.warn(`[bulk-approve] id=${id} failed:`, e);
+        }
+      }
+      return res.json({ success: true, processed: approved });
+    }
+
+    return res.status(400).json({ error: "Invalid action" });
+  }
+);
+
+// Google Forms config GET
+router.get(
+  "/application-forms/:id/google-forms-config",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, id));
+    if (!form) return res.status(404).json({ error: "Form not found" });
+    const cfg = form.googleFormsConfig as { formId?: string; serviceAccountJson?: Record<string, unknown> } | null;
+    res.json({
+      googleFormId: cfg?.formId ?? "",
+      hasServiceAccount: !!(cfg?.serviceAccountJson),
+    });
+  }
+);
+
+// Google Forms config PUT
+router.put(
+  "/application-forms/:id/google-forms-config",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const { googleFormId, serviceAccountJson } = req.body as { googleFormId: string; serviceAccountJson?: string };
+
+    let parsedJson: Record<string, unknown> | undefined;
+    if (serviceAccountJson && serviceAccountJson.trim()) {
+      try {
+        parsedJson = typeof serviceAccountJson === "string" ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+      } catch {
+        return res.status(400).json({ error: "Invalid service account JSON" });
+      }
+    }
+
+    // If no new service account JSON provided, keep existing
+    const [existing] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, id));
+    if (!existing) return res.status(404).json({ error: "Form not found" });
+
+    const existingCfg = existing.googleFormsConfig as { formId?: string; serviceAccountJson?: Record<string, unknown> } | null;
+    const newConfig = {
+      formId: googleFormId,
+      serviceAccountJson: parsedJson ?? existingCfg?.serviceAccountJson ?? undefined,
+    };
+
+    await db.update(applicationFormsTable)
+      .set({ googleFormsConfig: newConfig as never })
+      .where(eq(applicationFormsTable.id, id));
+
+    res.json({ success: true });
+  }
+);
+
+// Google Forms sync
+router.post(
+  "/application-forms/:id/sync-google-forms",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, id));
+    if (!form) return res.status(404).json({ error: "Form not found" });
+
+    const cfg = form.googleFormsConfig as { formId?: string; serviceAccountJson?: Record<string, unknown> } | null;
+    if (!cfg?.formId || !cfg?.serviceAccountJson) {
+      return res.status(400).json({ error: "Google Forms integration not configured. Please enter a Form ID and Service Account JSON." });
+    }
+
+    try {
+      const auth = new google.auth.GoogleAuth({
+        credentials: cfg.serviceAccountJson as Parameters<typeof google.auth.GoogleAuth>[0]["credentials"],
+        scopes: ["https://www.googleapis.com/auth/forms.responses.readonly"],
+      });
+
+      const formsApi = google.forms({ version: "v1", auth });
+      const responsesResp = await formsApi.forms.responses.list({ formId: cfg.formId });
+      const responses = responsesResp.data.responses ?? [];
+
+      // Get existing response IDs to avoid duplicates
+      const existingResult = await db.execute(sql`
+        SELECT google_forms_response_id FROM application_submissions
+        WHERE form_id = ${id} AND google_forms_response_id IS NOT NULL
+      `);
+      const existingIds = new Set(
+        (existingResult.rows as { google_forms_response_id: string }[])
+          .flatMap((r) => r.google_forms_response_id.split(",").map((id) => id.trim()))
+      );
+
+      // Get form structure to map question IDs to titles
+      const formMetaResp = await formsApi.forms.get({ formId: cfg.formId });
+      const items = formMetaResp.data.items ?? [];
+      const questionMap = new Map<string, string>();
+      for (const item of items) {
+        if (item.questionItem?.question?.questionId && item.title) {
+          questionMap.set(item.questionItem.question.questionId, item.title.toLowerCase());
+        }
+      }
+
+      // ── Step 1: parse every NEW response and group by normalised email ──────
+      type GFGroup = {
+        email: string; fullName: string; latestTs: string;
+        specializations: { name: string; centerPref: string }[];
+        responseIds: string[];
+        masterExtract: (kw: string[]) => string;
+        masterAnswers: Record<string, { textAnswers?: { answers?: { value?: string | null }[] } }>;
+      };
+
+      const emailGroups = new Map<string, GFGroup>();
+
+      for (const resp of responses) {
+        if (!resp.responseId || existingIds.has(resp.responseId)) continue;
+
+        const answers = resp.answers ?? {};
+        const makeExtract = (ans: typeof answers) => (keywords: string[]): string => {
+          for (const [qId, answer] of Object.entries(ans)) {
+            const title = questionMap.get(qId) ?? "";
+            if (keywords.some((k) => new RegExp(k, "i").test(title))) {
+              return (answer.textAnswers?.answers ?? []).map((a) => a.value ?? "").join(", ").trim();
+            }
+          }
+          return "";
+        };
+
+        const extract = makeExtract(answers);
+        const fullName = extract(["name in full", "full name", "your name"]);
+        const rawEmail = extract(["e-mail", "email"]);
+        if (!fullName || !rawEmail) continue;
+
+        const emailKey = rawEmail.toLowerCase().replace(/\s+/g, "");
+        const spec = extract(["applying for", "subspecialt", "special"]);
+        const centerPref =
+          extract(["cornea.*center", "glaucoma.*center", "iol.*center", "oculoplasty.*center", "pediatric.*center", "phaco.*center"]) ||
+          extract(["center", "location", "unit", "prefer"]);
+
+        if (!emailGroups.has(emailKey)) {
+          emailGroups.set(emailKey, {
+            email: rawEmail.trim(), fullName, latestTs: resp.lastSubmittedTime ?? "",
+            specializations: [], responseIds: [], masterExtract: extract, masterAnswers: answers,
+          });
+        }
+        const group = emailGroups.get(emailKey)!;
+        group.responseIds.push(resp.responseId);
+
+        // Collect unique specializations across all responses for this email
+        if (spec && !group.specializations.find((s) => s.name === spec)) {
+          group.specializations.push({ name: spec, centerPref: centerPref || "" });
+        }
+
+        // Keep the extract/answers from the most-recent response as "master"
+        if ((resp.lastSubmittedTime ?? "") >= group.latestTs) {
+          group.latestTs = resp.lastSubmittedTime ?? "";
+          group.masterExtract = extract;
+          group.masterAnswers = answers;
+        }
+      }
+
+      // ── Step 2: upsert one submission record per email ───────────────────────
+      let imported = 0;
+      let merged = 0;
+
+      for (const [emailKey, group] of emailGroups) {
+        const ex = group.masterExtract;
+
+        // Build merged specialization JSON
+        const specializationJson = JSON.stringify(
+          group.specializations.length > 0 ? group.specializations.map((s) => s.name) : []
+        );
+        const centerPrefJson = group.specializations.length > 0
+          ? JSON.stringify(Object.fromEntries(group.specializations.map((s) => [s.name, s.centerPref])))
+          : null;
+
+        // All merged Google Forms response IDs (comma-separated for traceability)
+        const allResponseIds = group.responseIds.join(",");
+
+        const phone        = ex(["mobile number", "phone number", "mobile", "phone", "contact number"]);
+        const degree       = ex(["degrees & other", "degree", "qualification", "mbbs"]);
+        const medicalCollege = ex(["medical college qualified", "medical college", "college"]);
+        const university   = ex(["university from which", "university"]);
+        const pgQualifications = ex(["postgraduate qual", "pg qual"]);
+        const medicalCouncilNumber = ex(["medical council registration", "council registration", "registration number"]);
+        const publications = ex(["journal.*publication", "publications"]);
+        const presentations = ex(["presentations.*conference", "presentations"]);
+        const referralSource = ex(["where did you hear", "hear about"]);
+        const referredByName = ex(["referred.*faculty", "faculty.*trainee", "referred by"]);
+        const permanentAddress = ex(["permanent address"]);
+        const dateOfBirth  = ex(["date of birth"]);
+        const maritalStatus = ex(["marital status"]);
+        const healthDeclaration = ex(["medical condition", "ailments", "suffering"]);
+        const lor1Url      = ex(["lor 1", "letter of recommendation 1"]);
+        const lor1RefName  = ex(["name.*designation.*reference", "designation of reference"]);
+        const lor1RefContact = ex(["contact number of reference"]);
+        const lor1RefEmail = ex(["email id of reference", "email.*reference"]);
+        const lor2Url      = ex(["lor 2", "letter of recommendation 2"]);
+        const paymentUrl   = ex(["screenshot.*transaction", "payment.*screenshot", "transaction id", "utr"]);
+        const photoUrl     = ex(["passport size photograph", "passport photo", "photograph"]);
+
+        // Check if a submission already exists for this email+formId (from a previous sync)
+        const existingSubResult = await db.execute(sql`
+          SELECT id, specialization, center_preference FROM application_submissions
+          WHERE form_id = ${id} AND LOWER(email) = ${emailKey}
+          LIMIT 1
+        `);
+        const existingSub = (existingSubResult.rows as { id: number; specialization: string | null; center_preference: string | null }[])[0];
+
+        if (existingSub) {
+          // Merge new specializations into existing record
+          let existingSpecs: string[] = [];
+          try { existingSpecs = JSON.parse(existingSub.specialization ?? "[]"); } catch {
+            if (existingSub.specialization) existingSpecs = [existingSub.specialization];
+          }
+          const newSpecs = group.specializations.map((s) => s.name);
+          const mergedSpecs = [...new Set([...existingSpecs, ...newSpecs])];
+
+          let existingCenterPrefs: Record<string, string> = {};
+          try { existingCenterPrefs = JSON.parse(existingSub.center_preference ?? "{}"); } catch { /* ignore */ }
+          const newCenterPrefs = Object.fromEntries(group.specializations.map((s) => [s.name, s.centerPref]));
+          const mergedCenterPrefs = { ...existingCenterPrefs, ...newCenterPrefs };
+
+          await db.execute(sql`
+            UPDATE application_submissions SET
+              specialization = ${JSON.stringify(mergedSpecs)},
+              center_preference = ${JSON.stringify(mergedCenterPrefs)},
+              google_forms_response_id = ${allResponseIds},
+              updated_at = NOW()
+            WHERE id = ${existingSub.id}
+          `);
+          merged++;
+        } else {
+          const subData = {
+            formId: id, status: "pending", source: "google_forms",
+            googleFormsResponseId: allResponseIds,
+            fullName: group.fullName, email: group.email,
+            phone: phone || null, specialization: specializationJson,
+            centerPreference: centerPrefJson,
+            degree: degree || null, medicalCollege: medicalCollege || null,
+            university: university || null, pgQualifications: pgQualifications || null,
+            medicalCouncilNumber: medicalCouncilNumber || null,
+            publications: publications || null, presentations: presentations || null,
+            referralSource: referralSource || null, referredByName: referredByName || null,
+            permanentAddress: permanentAddress || null, dateOfBirth: dateOfBirth || null,
+            maritalStatus: maritalStatus || null, healthDeclaration: healthDeclaration || null,
+            lor1Url: lor1Url || null, lor1RefName: lor1RefName || null,
+            lor1RefContact: lor1RefContact || null, lor1RefEmail: lor1RefEmail || null,
+            lor2Url: lor2Url || null, paymentUrl: paymentUrl || null,
+            photoUrl: photoUrl || null, declarationAccepted: true, customAnswers: {},
+          };
+          const isComplete = checkCompleteness(subData);
+          await db.insert(applicationSubmissionsTable).values({ ...subData, readyForReview: isComplete } as never);
+          imported++;
+        }
+      }
+
+      res.json({ success: true, imported, merged, total: responses.length, uniqueApplicants: emailGroups.size });
+    } catch (e: unknown) {
+      console.error("[google-forms-sync] error:", e);
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: `Google Forms sync failed: ${msg}` });
+    }
+  }
+);
+
+// Public: request a signed upload URL scoped to an active form token
+router.post("/apply/:token/request-upload-url", async (req, res) => {
+  const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.token, req.params.token));
+  if (!form) return res.status(404).json({ error: "Form not found" });
+  if (!form.isActive) return res.status(410).json({ error: "This form is no longer accepting submissions" });
+  if (form.deadline && new Date() > form.deadline) {
+    return res.status(410).json({ error: "The deadline for this form has passed" });
+  }
+  const { name, contentType, size, candidateName } = (req.body ?? {}) as { name?: string; contentType?: string; size?: number; candidateName?: string };
+  if (!name || typeof name !== "string" || !name.trim() || !contentType || typeof contentType !== "string") {
+    return res.status(400).json({ error: "Missing required fields: name, contentType" });
+  }
+  const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
+  if (!allowedTypes.includes(contentType)) {
+    return res.status(400).json({ error: "Only PDF, JPG, and PNG files are allowed" });
+  }
+  // LOR files (PDF): max 5 MB; passport photos (images): max 2 MB
+  const maxSize = contentType === "application/pdf" ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
+  if (size && size > maxSize) {
+    return res.status(400).json({ error: `File too large. Maximum size: ${maxSize / 1024 / 1024} MB` });
+  }
+  try {
+    const isReplit = !!process.env.REPL_ID;
+    if (!isReplit) {
+      // Local fallback
+      const objectId = Math.random().toString(36).substring(2, 15);
+      const ext = name.split('.').pop() ?? "bin";
+      
+      let folderName = candidateName ? candidateName.trim().replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, "_") : "Unknown_Candidate";
+      const filename = `${objectId}.${ext}`;
+      
+      const uploadURL = `/api/apply/${req.params.token}/local-upload/${folderName}/${filename}`;
+      const objectPath = `/objects/uploads/${folderName}/${filename}`;
+      return res.json({ uploadURL, objectPath, metadata: { name: name.trim(), size, contentType } });
+    }
+
+    const { ObjectStorageService } = await import("../lib/objectStorage");
+    const objectStorageService = new ObjectStorageService();
+    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    return res.json({ uploadURL, objectPath, metadata: { name: name.trim(), size, contentType } });
+  } catch (error) {
+    console.error("UPLOAD ENDPOINT ERROR:", error);
+    return res.status(500).json({ error: "Failed to generate upload URL", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// Public: handle local uploads when running outside Replit
+router.put("/apply/:token/local-upload/:folderName/:filename", async (req, res) => {
+  try {
+    const uploadDir = path.join(process.cwd(), "uploads", req.params.folderName);
+    await fs.mkdir(uploadDir, { recursive: true });
+    
+    const filePath = path.join(uploadDir, req.params.filename);
+    const writeStream = createWriteStream(filePath);
+    
+    req.pipe(writeStream);
+    
+    req.on("end", () => {
+      res.json({ success: true, path: `/objects/uploads/${req.params.folderName}/${req.params.filename}` });
+    });
+    
+    req.on("error", (err) => {
+      console.error("Upload error:", err);
+      res.status(500).json({ error: "Upload failed" });
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to process upload" });
+  }
+});
+
+// Public: get form info (includes specialities for dropdown + custom fields)
+router.get("/apply/:token", async (req, res) => {
+  const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.token, req.params.token));
+  if (!form) return res.status(404).json({ error: "Form not found" });
+  if (!form.isActive) return res.status(410).json({ error: "This form is no longer accepting submissions" });
+  if (form.deadline && new Date() > form.deadline) {
+    return res.status(410).json({ error: "The deadline for this form has passed" });
+  }
+  const [program] = await db.select().from(programsTable).where(eq(programsTable.id, form.programId));
+
+  const CANONICAL_SPECIALITIES = [
+    "Cornea", "Glaucoma", "IOL Fellowship", "Medical Retina",
+    "Oculoplasty", "Pediatric Ophthalmology", "Phaco Refractive", "Vitreo Retina",
+  ];
+  const CANONICAL_UNITS = [
+    "Anand", "Bangalore", "Coimbatore", "Guntur", "Hyderabad",
+    "Indore", "Jaipur", "Kanpur", "Krishnankoil", "Ludhiana",
+    "Panvel", "Shimoga", "Varanasi",
+  ];
+
+  const specResult = await db.execute(sql`
+    SELECT DISTINCT speciality FROM seat_matrix_entries
+    WHERE speciality !~ '^[0-9]' AND speciality != 'Date'
+    ORDER BY speciality
+  `);
+  const dbSpecs = (specResult.rows as { speciality: string }[]).map((r) => r.speciality);
+  const specialities = dbSpecs.length > 0 ? dbSpecs : CANONICAL_SPECIALITIES;
+
+  const unitResult = await db.execute(sql`
+    SELECT DISTINCT unit_name FROM seat_matrix_entries
+    WHERE unit_name !~ '^[0-9]'
+    ORDER BY unit_name
+  `);
+  const dbUnits = (unitResult.rows as { unit_name: string }[]).map((r) => r.unit_name);
+  const units = dbUnits.length > 0 ? dbUnits : CANONICAL_UNITS;
+
+  res.json({ ...form, programName: program?.name ?? null, specialities, units, customFields: form.customFields ?? [] });
+});
+
+// Public: payment config
+router.get("/apply/:token/payment-config", async (req, res) => {
+  const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.token, req.params.token));
+  const programId = form?.programId ?? null;
+
+  const all = await db.select().from(paymentSettingsTable).where(eq(paymentSettingsTable.isActive, true));
+  const specific = programId ? all.find((s) => s.programId === programId) : null;
+  const global = all.find((s) => s.programId === null);
+  const setting = specific ?? global ?? null;
+
+  if (!setting) {
+    return res.json({ mock: true, amount: 275000, currency: "INR", description: "Fellowship Application Fee" });
+  }
+
+  const hasCreds = !!(setting.razorpayKeyId && setting.razorpayKeySecret);
+  res.json({
+    mock: !hasCreds,
+    keyId: hasCreds ? setting.razorpayKeyId : undefined,
+    amount: setting.amount,
+    currency: setting.currency,
+    description: setting.description,
+    mode: setting.mode,
+    upiId: setting.upiId ?? undefined,
+  });
+});
+
+// Public: submit application
+router.post("/apply/:token", async (req, res) => {
+  const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.token, req.params.token));
+  if (!form) return res.status(404).json({ error: "Form not found" });
+  if (!form.isActive) return res.status(410).json({ error: "This form is no longer accepting submissions" });
+  if (form.deadline && new Date() > form.deadline) {
+    return res.status(410).json({ error: "The deadline for this form has passed" });
+  }
+
+  const body = req.body as Record<string, unknown>;
+  if (!body.fullName || !body.email) {
+    return res.status(400).json({ error: "Full name and email are required" });
+  }
+
+  // Prevent duplicate submissions within 60 seconds
+  const duplicateCheck = await db.execute(sql`
+    SELECT id FROM application_submissions 
+    WHERE form_id = ${form.id} 
+    AND email = ${body.email} 
+    AND submitted_at > NOW() - INTERVAL '1 minute'
+  `);
+  if (duplicateCheck.rows.length > 0) {
+    return res.status(429).json({ error: "Duplicate submission detected. Please wait a minute before trying again." });
+  }
+
+  const lor1UrlRaw = (body.lor1Url as string) ?? null;
+  const lor2UrlRaw = (body.lor2Url as string) ?? null;
+  const photoUrlRaw = (body.photoUrl as string) ?? null;
+
+  if (lor1UrlRaw && !lor1UrlRaw.startsWith("/objects/uploads/")) {
+    return res.status(400).json({ error: "Invalid LOR 1 file path — please upload using the form uploader." });
+  }
+  if (lor2UrlRaw && !lor2UrlRaw.startsWith("/objects/uploads/")) {
+    return res.status(400).json({ error: "Invalid LOR 2 file path — please upload using the form uploader." });
+  }
+  if (photoUrlRaw && !photoUrlRaw.startsWith("/objects/uploads/")) {
+    return res.status(400).json({ error: "Invalid passport photo path — please upload using the form uploader." });
+  }
+
+  const subData = {
+    formId: form.id,
+    status: (body.saveAsDraft as boolean) ? "draft" : "pending",
+    saveAsDraft: (body.saveAsDraft as boolean) ?? false,
+    source: "internal",
+    specialization: (body.specialization as string) ?? null,
+    centerPreference: (body.centerPreference as string) ?? null,
+    referralSource: (body.referralSource as string) ?? null,
+    referredByName: (body.referredByName as string) ?? null,
+    mediaSource: (body.mediaSource as string) ?? null,
+    fullName: body.fullName as string,
+    permanentAddress: (body.permanentAddress as string) ?? null,
+    mailingAddress: (body.mailingAddress as string) ?? null,
+    phone: (body.phone as string) ?? null,
+    email: body.email as string,
+    dateOfBirth: (body.dateOfBirth as string) ?? null,
+    maritalStatus: (body.maritalStatus as string) ?? null,
+    spouseDetails: (body.spouseDetails as string) ?? null,
+    healthDeclaration: (body.healthDeclaration as string) ?? null,
+    healthDetails: (body.healthDetails as string) ?? null,
+    medicalConditions: body.medicalConditions ? JSON.stringify(body.medicalConditions) : null,
+    previousApplicationMonthYear: (body.previousApplicationMonthYear as string) ?? null,
+    degree: (body.degree as string) ?? null,
+    medicalCollege: (body.medicalCollege as string) ?? null,
+    university: (body.university as string) ?? null,
+    pgQualifications: (body.pgQualifications as string) ?? null,
+    doQualification: (body.doQualification as boolean) ?? null,
+    doDetails: (body.doDetails as string) ?? null,
+    msMdQualification: (body.msMdQualification as boolean) ?? null,
+    msMdDetails: (body.msMdDetails as string) ?? null,
+    dnbQualification: (body.dnbQualification as boolean) ?? null,
+    dnbDetails: (body.dnbDetails as string) ?? null,
+    otherTraining: (body.otherTraining as string) ?? null,
+    medicalCouncilNumber: (body.medicalCouncilNumber as string) ?? null,
+    diagnosticSkills: body.diagnosticSkills ? JSON.stringify(body.diagnosticSkills) : null,
+    surgicalExperience: body.surgicalExperience ? JSON.stringify(body.surgicalExperience) : null,
+    totalSurgeries: (body.totalSurgeries as string) ?? null,
+    publications: (body.publications as string) ?? null,
+    presentations: (body.presentations as string) ?? null,
+    lor1Url: lor1UrlRaw,
+    lor1RefName: (body.lor1RefName as string) ?? null,
+    lor1RefContact: (body.lor1RefContact as string) ?? null,
+    lor1RefEmail: (body.lor1RefEmail as string) ?? null,
+    lor2Url: lor2UrlRaw,
+    lor2RefName: (body.lor2RefName as string) ?? null,
+    lor2RefContact: (body.lor2RefContact as string) ?? null,
+    lor2RefEmail: (body.lor2RefEmail as string) ?? null,
+    otherInformation: (body.otherInformation as string) ?? null,
+    declarationAccepted: (body.declarationAccepted as boolean) ?? false,
+    paymentUrl: (body.paymentId as string) ? `razorpay:${body.paymentId}` : ((body.paymentUrl as string) ?? null),
+    photoUrl: photoUrlRaw,
+    customAnswers: (body.customAnswers as Record<string, string>) ?? {},
+  };
+
+  const isComplete = checkCompleteness(subData);
+
+  const [sub] = await db.insert(applicationSubmissionsTable).values({
+    ...subData,
+    readyForReview: isComplete,
+  } as never).returning();
+
+  res.status(201).json({ success: true, submissionId: sub!.id });
+});
+
+export default router;

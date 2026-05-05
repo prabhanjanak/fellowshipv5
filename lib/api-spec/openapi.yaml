@@ -1,0 +1,1531 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Fellowship Entrance Exam and Seat Allocation System API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+  - name: auth
+  - name: users
+  - name: programs
+  - name: specialities
+  - name: units
+  - name: candidates
+  - name: preferences
+  - name: documents
+  - name: exams
+  - name: questions
+  - name: psychometric
+  - name: attempts
+  - name: interviews
+  - name: doctors
+  - name: rankings
+  - name: allocations
+  - name: dashboard
+  - name: storage
+    description: Object storage upload and serving endpoints.
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email + password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /auth/register-student:
+    post:
+      operationId: registerStudent
+      tags: [auth]
+      summary: Self-register as a student/candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterStudentInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List staff users (Super Admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: role
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create staff user (admin)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewUser"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /programs:
+    get:
+      operationId: listPrograms
+      tags: [programs]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Program" }
+    post:
+      operationId: createProgram
+      tags: [programs]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewProgram"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Program" }
+
+  /programs/{programId}:
+    get:
+      operationId: getProgram
+      tags: [programs]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProgramDetail" }
+
+  /specialities:
+    get:
+      operationId: listSpecialities
+      tags: [specialities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Speciality" }
+    post:
+      operationId: createSpeciality
+      tags: [specialities]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewSpeciality"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Speciality" }
+
+  /specialities/{specialityId}:
+    patch:
+      operationId: updateSpeciality
+      tags: [specialities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: specialityId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpecialityUpdate"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Speciality" }
+
+  /units:
+    get:
+      operationId: listUnits
+      tags: [units]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Unit" }
+    post:
+      operationId: createUnit
+      tags: [units]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewUnit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Unit" }
+
+  /candidates:
+    get:
+      operationId: listCandidates
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: query
+          schema: { type: integer }
+        - name: unitId
+          in: query
+          schema: { type: integer }
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Candidate" }
+
+  /candidates/me:
+    get:
+      operationId: getMyCandidate
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CandidateDetail" }
+    patch:
+      operationId: updateMyCandidate
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCandidateBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CandidateDetail" }
+
+  /candidates/{candidateId}:
+    get:
+      operationId: getCandidate
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidateId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CandidateDetail" }
+
+  /candidates/{candidateId}/assign-unit:
+    post:
+      operationId: assignCandidateUnit
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidateId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignUnitBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Candidate" }
+
+  /candidates/{candidateId}/exam-assignments:
+    get:
+      operationId: listCandidateExamAssignments
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidateId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CandidateExamAssignment" }
+    put:
+      operationId: setCandidateExamAssignments
+      tags: [candidates]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidateId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetExamAssignmentsBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CandidateExamAssignment" }
+
+  /preferences/me:
+    get:
+      operationId: listMyPreferences
+      tags: [preferences]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Preference" }
+    put:
+      operationId: setMyPreferences
+      tags: [preferences]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPreferencesBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Preference" }
+
+  /documents/me:
+    get:
+      operationId: listMyDocuments
+      tags: [documents]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Document" }
+    post:
+      operationId: uploadMyDocument
+      tags: [documents]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadDocumentBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+
+  /exams:
+    get:
+      operationId: listExams
+      tags: [exams]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: query
+          schema: { type: integer }
+        - name: kind
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Exam" }
+    post:
+      operationId: createExam
+      tags: [exams]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewExam"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Exam" }
+
+  /exams/{examId}:
+    get:
+      operationId: getExam
+      tags: [exams]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: examId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamDetail" }
+
+  /exams/{examId}/questions:
+    get:
+      operationId: listExamQuestions
+      tags: [questions]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: examId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/QuestionAdmin" }
+    post:
+      operationId: createQuestion
+      tags: [questions]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: examId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewQuestion"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuestionAdmin" }
+
+  /exams/{examId}/questions/bulk:
+    post:
+      operationId: bulkUploadQuestions
+      tags: [questions]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: examId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkUploadBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BulkUploadResult" }
+
+  /attempts/start:
+    post:
+      operationId: startAttempt
+      tags: [attempts]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAttemptInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptInProgress" }
+
+  /attempts/{attemptId}:
+    get:
+      operationId: getAttempt
+      tags: [attempts]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptInProgress" }
+
+  /attempts/{attemptId}/answer:
+    post:
+      operationId: saveAnswer
+      tags: [attempts]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveAnswerInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveAnswerResult" }
+
+  /attempts/{attemptId}/submit:
+    post:
+      operationId: submitAttempt
+      tags: [attempts]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptResult" }
+
+  /attempts/me:
+    get:
+      operationId: listMyAttempts
+      tags: [attempts]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AttemptSummary" }
+
+  /interviews/assignments:
+    get:
+      operationId: listMyInterviewAssignments
+      tags: [interviews]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/InterviewAssignment" }
+
+  /interviews/scores:
+    post:
+      operationId: submitInterviewScore
+      tags: [interviews]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterviewScoreInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterviewScore" }
+
+  /doctors:
+    get:
+      operationId: listDoctors
+      tags: [doctors]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Doctor" }
+
+  /doctors/{doctorId}/assign-unit:
+    post:
+      operationId: assignDoctorUnit
+      tags: [doctors]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DoctorUnitAssignment"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Doctor" }
+
+  /doctors/{doctorId}/assign-candidate:
+    post:
+      operationId: assignDoctorCandidate
+      tags: [doctors]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DoctorCandidateAssignment"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterviewAssignment" }
+
+  /rankings:
+    get:
+      operationId: getRankings
+      tags: [rankings]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RankingRow" }
+
+  /allocations/run:
+    post:
+      operationId: runAllocation
+      tags: [allocations]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunAllocationInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllocationRunResult" }
+
+  /allocations:
+    get:
+      operationId: listAllocations
+      tags: [allocations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: programId
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Allocation" }
+
+  /allocations/me:
+    get:
+      operationId: getMyAllocation
+      tags: [allocations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Allocation" }
+
+  /allocations/{allocationId}/override:
+    post:
+      operationId: overrideAllocation
+      tags: [allocations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: allocationId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AllocationOverride"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Allocation" }
+
+  /allocations/{allocationId}/letter:
+    get:
+      operationId: getAllocationLetter
+      tags: [allocations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: allocationId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllocationLetter" }
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummary" }
+
+  /dashboard/recent-activity:
+    get:
+      operationId: getRecentActivity
+      tags: [dashboard]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ActivityItem" }
+
+  /dashboard/exam-progress:
+    get:
+      operationId: getExamProgress
+      tags: [dashboard]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unitId
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ExamProgressRow" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status: { type: string }
+      required: [status]
+
+    LoginInput:
+      type: object
+      properties:
+        email: { type: string }
+        password: { type: string }
+      required: [email, password]
+
+    RegisterStudentInput:
+      type: object
+      properties:
+        fullName: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        password: { type: string }
+      required: [fullName, email, phone, password]
+
+    AuthResponse:
+      type: object
+      properties:
+        token: { type: string }
+        user: { $ref: "#/components/schemas/CurrentUser" }
+      required: [token, user]
+
+    CurrentUser:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        fullName: { type: string }
+        role: { type: string }
+        candidateId: { type: integer, nullable: true }
+        unitId: { type: integer, nullable: true }
+        programId: { type: integer, nullable: true }
+      required: [id, email, fullName, role]
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        fullName: { type: string }
+        role: { type: string }
+        unitId: { type: integer, nullable: true }
+        unitName: { type: string, nullable: true }
+        programId: { type: integer, nullable: true }
+        programName: { type: string, nullable: true }
+        active: { type: boolean }
+        createdAt: { type: string }
+      required: [id, email, fullName, role, active, createdAt]
+
+    NewUser:
+      type: object
+      properties:
+        email: { type: string }
+        fullName: { type: string }
+        password: { type: string }
+        role: { type: string }
+        unitId: { type: integer, nullable: true }
+        programId: { type: integer, nullable: true }
+      required: [email, fullName, password, role]
+
+    Program:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        code: { type: string }
+        description: { type: string, nullable: true }
+        academicYear: { type: string }
+        totalSeats: { type: integer }
+        specialityCount: { type: integer }
+        candidateCount: { type: integer }
+      required: [id, name, code, academicYear, totalSeats, specialityCount, candidateCount]
+
+    ProgramDetail:
+      allOf:
+        - $ref: "#/components/schemas/Program"
+        - type: object
+          properties:
+            specialities:
+              type: array
+              items: { $ref: "#/components/schemas/Speciality" }
+          required: [specialities]
+
+    NewProgram:
+      type: object
+      properties:
+        name: { type: string }
+        code: { type: string }
+        description: { type: string }
+        academicYear: { type: string }
+      required: [name, code, academicYear]
+
+    Speciality:
+      type: object
+      properties:
+        id: { type: integer }
+        programId: { type: integer }
+        name: { type: string }
+        code: { type: string }
+        seats: { type: integer }
+        filledSeats: { type: integer }
+      required: [id, programId, name, code, seats, filledSeats]
+
+    NewSpeciality:
+      type: object
+      properties:
+        programId: { type: integer }
+        name: { type: string }
+        code: { type: string }
+        seats: { type: integer }
+      required: [programId, name, code, seats]
+
+    SpecialityUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        seats: { type: integer }
+
+    Unit:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        city: { type: string }
+        state: { type: string }
+        candidateCount: { type: integer }
+      required: [id, name, city, state, candidateCount]
+
+    NewUnit:
+      type: object
+      properties:
+        name: { type: string }
+        city: { type: string }
+        state: { type: string }
+      required: [name, city, state]
+
+    Candidate:
+      type: object
+      properties:
+        id: { type: integer }
+        candidateCode: { type: string }
+        fullName: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        unitId: { type: integer, nullable: true }
+        unitName: { type: string, nullable: true }
+        status: { type: string }
+        mcqScore: { type: number, nullable: true }
+        psychometricScore: { type: number, nullable: true }
+        interviewScore: { type: number, nullable: true }
+        totalScore: { type: number, nullable: true }
+        rank: { type: integer, nullable: true }
+        createdAt: { type: string }
+      required: [id, candidateCode, fullName, email, phone, status, createdAt]
+
+    CandidateDetail:
+      allOf:
+        - $ref: "#/components/schemas/Candidate"
+        - type: object
+          properties:
+            dateOfBirth: { type: string, nullable: true }
+            gender: { type: string, nullable: true }
+            qualification: { type: string, nullable: true }
+            collegeName: { type: string, nullable: true }
+            address: { type: string, nullable: true }
+            preferences:
+              type: array
+              items: { $ref: "#/components/schemas/Preference" }
+            documents:
+              type: array
+              items: { $ref: "#/components/schemas/Document" }
+            attempts:
+              type: array
+              items: { $ref: "#/components/schemas/AttemptSummary" }
+
+    UpdateCandidateBody:
+      type: object
+      properties:
+        fullName: { type: string }
+        phone: { type: string }
+        dateOfBirth: { type: string }
+        gender: { type: string }
+        qualification: { type: string }
+        collegeName: { type: string }
+        address: { type: string }
+
+    AssignUnitBody:
+      type: object
+      properties:
+        unitId: { type: integer }
+      required: [unitId]
+
+    CandidateExamAssignment:
+      type: object
+      properties:
+        id: { type: integer }
+        examId: { type: integer }
+        examTitle: { type: string }
+        examKind: { type: string }
+        assignedAt: { type: string }
+      required: [id, examId, examTitle, examKind, assignedAt]
+
+    SetExamAssignmentsBody:
+      type: object
+      properties:
+        examIds:
+          type: array
+          items: { type: integer }
+      required: [examIds]
+
+    Preference:
+      type: object
+      properties:
+        id: { type: integer }
+        specialityId: { type: integer }
+        specialityName: { type: string }
+        programName: { type: string }
+        preferenceOrder: { type: integer }
+      required: [id, specialityId, specialityName, programName, preferenceOrder]
+
+    SetPreferencesBody:
+      type: object
+      properties:
+        specialityIds:
+          type: array
+          items: { type: integer }
+      required: [specialityIds]
+
+    Document:
+      type: object
+      properties:
+        id: { type: integer }
+        docType: { type: string }
+        fileName: { type: string }
+        uploadedAt: { type: string }
+      required: [id, docType, fileName, uploadedAt]
+
+    UploadDocumentBody:
+      type: object
+      properties:
+        docType: { type: string }
+        fileName: { type: string }
+        contentBase64: { type: string }
+      required: [docType, fileName, contentBase64]
+
+    Exam:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        kind: { type: string }
+        programId: { type: integer, nullable: true }
+        programName: { type: string, nullable: true }
+        durationMinutes: { type: integer }
+        totalQuestions: { type: integer }
+        questionCount: { type: integer }
+        passingScore: { type: number, nullable: true }
+        active: { type: boolean }
+        startsAt: { type: string, nullable: true }
+        endsAt: { type: string, nullable: true }
+      required: [id, title, kind, durationMinutes, totalQuestions, questionCount, active]
+
+    ExamDetail:
+      allOf:
+        - $ref: "#/components/schemas/Exam"
+        - type: object
+          properties:
+            description: { type: string, nullable: true }
+
+    NewExam:
+      type: object
+      properties:
+        title: { type: string }
+        kind: { type: string }
+        programId: { type: integer, nullable: true }
+        durationMinutes: { type: integer }
+        totalQuestions: { type: integer }
+        passingScore: { type: number }
+        description: { type: string }
+        startsAt: { type: string }
+        endsAt: { type: string }
+      required: [title, kind, durationMinutes, totalQuestions]
+
+    QuestionAdmin:
+      type: object
+      properties:
+        id: { type: integer }
+        examId: { type: integer }
+        kind: { type: string }
+        body: { type: string }
+        marks: { type: number }
+        pairId: { type: integer, nullable: true }
+        rule: { type: object, nullable: true, additionalProperties: true }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/OptionAdmin" }
+      required: [id, examId, kind, body, marks, options]
+
+    OptionAdmin:
+      type: object
+      properties:
+        id: { type: integer }
+        body: { type: string }
+        isCorrect: { type: boolean }
+        score: { type: number, nullable: true }
+      required: [id, body, isCorrect]
+
+    NewQuestion:
+      type: object
+      properties:
+        kind: { type: string }
+        body: { type: string }
+        marks: { type: number }
+        pairId: { type: integer, nullable: true }
+        rule: { type: object, additionalProperties: true }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              body: { type: string }
+              isCorrect: { type: boolean }
+              score: { type: number }
+            required: [body]
+      required: [kind, body, marks, options]
+
+    BulkUploadBody:
+      type: object
+      properties:
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              body: { type: string }
+              optionA: { type: string }
+              optionB: { type: string }
+              optionC: { type: string }
+              optionD: { type: string }
+              correct: { type: string }
+              marks: { type: number }
+            required: [body, optionA, optionB, optionC, optionD, correct]
+      required: [rows]
+
+    BulkUploadResult:
+      type: object
+      properties:
+        inserted: { type: integer }
+      required: [inserted]
+
+    StartAttemptInput:
+      type: object
+      properties:
+        examId: { type: integer }
+      required: [examId]
+
+    AttemptInProgress:
+      type: object
+      properties:
+        id: { type: integer }
+        examId: { type: integer }
+        examTitle: { type: string }
+        examKind: { type: string }
+        durationMinutes: { type: integer }
+        startedAt: { type: string }
+        deadline: { type: string }
+        submittedAt: { type: string, nullable: true }
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/QuestionForCandidate" }
+        savedAnswers:
+          type: array
+          items:
+            type: object
+            properties:
+              questionId: { type: integer }
+              optionId: { type: integer, nullable: true }
+              numericValue: { type: number, nullable: true }
+            required: [questionId]
+      required: [id, examId, examTitle, examKind, durationMinutes, startedAt, deadline, questions, savedAnswers]
+
+    QuestionForCandidate:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string }
+        body: { type: string }
+        marks: { type: number }
+        pairId: { type: integer, nullable: true }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              body: { type: string }
+            required: [id, body]
+      required: [id, kind, body, marks, options]
+
+    SaveAnswerInput:
+      type: object
+      properties:
+        questionId: { type: integer }
+        optionId: { type: integer, nullable: true }
+        numericValue: { type: number, nullable: true }
+      required: [questionId]
+
+    SaveAnswerResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+      required: [ok]
+
+    AttemptResult:
+      type: object
+      properties:
+        id: { type: integer }
+        examId: { type: integer }
+        score: { type: number }
+        maxScore: { type: number }
+        submittedAt: { type: string }
+      required: [id, examId, score, maxScore, submittedAt]
+
+    AttemptSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        examId: { type: integer }
+        examTitle: { type: string }
+        examKind: { type: string }
+        score: { type: number, nullable: true }
+        maxScore: { type: number, nullable: true }
+        submittedAt: { type: string, nullable: true }
+        startedAt: { type: string }
+      required: [id, examId, examTitle, examKind, startedAt]
+
+    InterviewAssignment:
+      type: object
+      properties:
+        id: { type: integer }
+        candidateId: { type: integer }
+        candidateName: { type: string }
+        candidateCode: { type: string }
+        unitName: { type: string, nullable: true }
+        scheduledAt: { type: string, nullable: true }
+        status: { type: string }
+        existingScore:
+          $ref: "#/components/schemas/InterviewScore"
+          nullable: true
+      required: [id, candidateId, candidateName, candidateCode, status]
+
+    InterviewScore:
+      type: object
+      properties:
+        id: { type: integer }
+        candidateId: { type: integer }
+        doctorId: { type: integer }
+        doctorName: { type: string }
+        score: { type: number }
+        remarks: { type: string, nullable: true }
+        submittedAt: { type: string }
+      required: [id, candidateId, doctorId, doctorName, score, submittedAt]
+
+    InterviewScoreInput:
+      type: object
+      properties:
+        candidateId: { type: integer }
+        score: { type: number }
+        remarks: { type: string }
+      required: [candidateId, score]
+
+    Doctor:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        fullName: { type: string }
+        email: { type: string }
+        unitId: { type: integer, nullable: true }
+        unitName: { type: string, nullable: true }
+        assignedCandidates: { type: integer }
+      required: [id, userId, fullName, email, assignedCandidates]
+
+    DoctorUnitAssignment:
+      type: object
+      properties:
+        unitId: { type: integer }
+      required: [unitId]
+
+    DoctorCandidateAssignment:
+      type: object
+      properties:
+        candidateId: { type: integer }
+      required: [candidateId]
+
+    RankingRow:
+      type: object
+      properties:
+        candidateId: { type: integer }
+        candidateCode: { type: string }
+        fullName: { type: string }
+        mcqScore: { type: number }
+        psychometricScore: { type: number }
+        interviewScore: { type: number }
+        totalScore: { type: number }
+        rank: { type: integer }
+        topPreference: { type: string, nullable: true }
+      required: [candidateId, candidateCode, fullName, mcqScore, psychometricScore, interviewScore, totalScore, rank]
+
+    RunAllocationInput:
+      type: object
+      properties:
+        programId: { type: integer }
+      required: [programId]
+
+    AllocationRunResult:
+      type: object
+      properties:
+        selected: { type: integer }
+        waitlisted: { type: integer }
+        rejected: { type: integer }
+      required: [selected, waitlisted, rejected]
+
+    Allocation:
+      type: object
+      properties:
+        id: { type: integer }
+        candidateId: { type: integer }
+        candidateName: { type: string }
+        candidateCode: { type: string }
+        specialityId: { type: integer, nullable: true }
+        specialityName: { type: string, nullable: true }
+        programName: { type: string }
+        unitId: { type: integer, nullable: true }
+        unitName: { type: string, nullable: true }
+        status: { type: string }
+        rank: { type: integer, nullable: true }
+        allocatedAt: { type: string }
+      required: [id, candidateId, candidateName, candidateCode, programName, status, allocatedAt]
+
+    AllocationOverride:
+      type: object
+      properties:
+        specialityId: { type: integer, nullable: true }
+        status: { type: string }
+      required: [status]
+
+    AllocationLetter:
+      type: object
+      properties:
+        candidateName: { type: string }
+        candidateCode: { type: string }
+        programName: { type: string }
+        specialityName: { type: string }
+        unitName: { type: string }
+        unitCity: { type: string }
+        allocatedAt: { type: string }
+        status: { type: string }
+        pdfBase64: { type: string }
+      required: [candidateName, candidateCode, programName, specialityName, unitName, unitCity, allocatedAt, status, pdfBase64]
+
+    DashboardSummary:
+      type: object
+      properties:
+        candidates: { type: integer }
+        programs: { type: integer }
+        specialities: { type: integer }
+        totalSeats: { type: integer }
+        filledSeats: { type: integer }
+        attemptsCompleted: { type: integer }
+        interviewsCompleted: { type: integer }
+        allocated: { type: integer }
+        waitlisted: { type: integer }
+        statusBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: string }
+              count: { type: integer }
+            required: [status, count]
+      required: [candidates, programs, specialities, totalSeats, filledSeats, attemptsCompleted, interviewsCompleted, allocated, waitlisted, statusBreakdown]
+
+    ActivityItem:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        title: { type: string }
+        subtitle: { type: string, nullable: true }
+        at: { type: string }
+      required: [id, kind, title, at]
+
+    ExamProgressRow:
+      type: object
+      properties:
+        examId: { type: integer }
+        examTitle: { type: string }
+        examKind: { type: string }
+        totalCandidates: { type: integer }
+        startedCount: { type: integer }
+        completedCount: { type: integer }
+        averageScore: { type: number, nullable: true }
+      required: [examId, examTitle, examKind, totalCandidates, startedCount, completedCount]

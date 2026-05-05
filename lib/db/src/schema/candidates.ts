@@ -1,0 +1,34 @@
+import { pgTable, text, serial, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+
+export const candidateStatusEnum = pgEnum("candidate_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "interview_completed",
+  "waitlisted",
+  "allocated",
+]);
+
+export const candidatesTable = pgTable("candidates", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  candidateCode: text("candidate_code").notNull().unique(),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull().unique(),
+  phone: text("phone"),
+  dateOfBirth: text("date_of_birth"),
+  gender: text("gender"),
+  qualification: text("qualification"),
+  collegeName: text("college_name"),
+  address: text("address"),
+  unitId: integer("unit_id"),
+  status: candidateStatusEnum("status").notNull().default("pending"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+});
+
+export const insertCandidateSchema = createInsertSchema(candidatesTable).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertCandidate = z.infer<typeof insertCandidateSchema>;
+export type Candidate = typeof candidatesTable.$inferSelect;
